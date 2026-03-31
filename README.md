@@ -220,15 +220,16 @@ Urban Discovery Map은 사용자가 장소를 저장하고, 태그를 기반으�
 
 ## 3. 시스템 아키텍처
 
-[User Action]
-   ↓
-[Next.js Frontend]
-   ↓
-[API Layer]
-   ↓
-[Supabase (PostgreSQL)]
-   ↓
-[Event Logging]
+[User Action]  
+   ↓  
+[Next.js Frontend]  
+   ↓  
+[API Layer]  
+   ↓  
+[Supabase (PostgreSQL)]  
+   ↓  
+[Event Logging]  
+
 
 ---
 
