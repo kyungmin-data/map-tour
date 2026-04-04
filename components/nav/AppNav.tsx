@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { Suspense } from 'react'
 
 function NavTab({ href, label, active }: { href: string; label: string; active: boolean }) {
   return (
@@ -19,9 +20,22 @@ function NavTab({ href, label, active }: { href: string; label: string; active: 
   )
 }
 
+function AppNavTabs() {
+  const pathname    = usePathname()
+  const searchParams = useSearchParams()
+  const view        = searchParams.get('view')
+
+  return (
+    <div className="flex items-center gap-1">
+      <NavTab href="/"                  label="저장 장소" active={pathname === '/' && view !== 'exploration'} />
+      <NavTab href="/?view=exploration" label="탐험 패턴" active={pathname === '/' && view === 'exploration'} />
+      <NavTab href="/cards"             label="내 카드"   active={pathname === '/cards'} />
+    </div>
+  )
+}
+
 export default function AppNav() {
-  const pathname = usePathname()
-  const router   = useRouter()
+  const router = useRouter()
 
   async function handleLogout() {
     const supabase = createClient()
@@ -32,10 +46,9 @@ export default function AppNav() {
 
   return (
     <nav className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
-      <div className="flex items-center gap-1">
-        <NavTab href="/"      label="지도"   active={pathname === '/'} />
-        <NavTab href="/cards" label="내 카드" active={pathname === '/cards'} />
-      </div>
+      <Suspense fallback={<div className="flex items-center gap-1 h-8" />}>
+        <AppNavTabs />
+      </Suspense>
       <button
         onClick={handleLogout}
         className="text-xs text-gray-400 hover:text-gray-700 transition-colors px-2 py-1"

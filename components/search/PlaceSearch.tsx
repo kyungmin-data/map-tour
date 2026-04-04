@@ -1,11 +1,14 @@
 'use client'
 
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   savePlace as savePlaceAction,
   deletePlace as deletePlaceAction,
   createList as createListAction,
   updatePlaceTags as updatePlaceTagsAction,
+  updatePlaceMemo as updatePlaceMemoAction,
+  publishList as publishListAction,
   type PlaceData,
   type ListData,
 } from '@/lib/actions/places'
@@ -14,8 +17,9 @@ import {
   loadGuestLists,  saveGuestLists,
 } from '@/lib/storage/local'
 import NaverMap from '@/components/map/NaverMap'
-import ListCard from '@/components/card/ListCard'
+import ExplorationMap from '@/components/map/ExplorationMap'
 import PromptModal from '@/components/ui/PromptModal'
+import { analyzeRegions, CATEGORY_COLORS } from '@/lib/utils/regions'
 import { CATEGORY_GROUPS, CATEGORY_SUBGROUPS, mapNaverCategory } from '@/lib/data/categories'
 import { PREFERENCE_GROUPS, MVP_VISIBLE_TAGS } from '@/lib/data/preferences'
 
@@ -104,6 +108,9 @@ function CompactPlaceRow({
               </span>
             )}
           </div>
+          {place.memo && (
+            <p className="text-[10px] text-gray-400 mt-0.5 truncate">{place.memo}</p>
+          )}
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onEditClick() }}
@@ -152,6 +159,7 @@ export default function PlaceSearch({
   const [pendingCategoryGroup, setPendingCatGroup]  = useState('')
   const [pendingCategorySubgroup, setPendingCatSub] = useState('')
   const [pendingPreferenceTags, setPendingTags]     = useState<string[]>([])
+  const [pendingMemo, setPendingMemo]               = useState('')
   const [showAllSaveTags, setShowAllSaveTags]       = useState(false)
   const [pendingListId, setPendingListId]           = useState<string | null>(null)
   const [newListName, setNewListName]               = useState('')
@@ -168,21 +176,32 @@ export default function PlaceSearch({
   const [showAllFilterTags, setShowAllFilterTags] = useState(false)
   const [activeList, setActiveList]               = useState<string | null>(null)
 
-  // list card
-  const [showCard, setShowCard] = useState(false)
+  // share
+  const [shareStatus, setShareStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [shareError, setShareError]   = useState<string | null>(null)
+  const [shareUrl, setShareUrl]       = useState<string | null>(null)
+  const [copyStatus, setCopyStatus]   = useState<'idle' | 'copied' | 'failed'>('idle')
+  const shareUrlInputRef              = useRef<HTMLInputElement>(null)
 
   // prompt modal
   const [activePrompt, setActivePrompt] = useState<'guest-signup' | 'auth-cards' | null>(null)
 
-  // tag editing
+  // tag + memo editing
   const [editingPlace, setEditingPlace]       = useState<PlaceData | null>(null)
   const [editTags, setEditTags]               = useState<string[]>([])
+  const [editMemo, setEditMemo]               = useState('')
   const [showAllEditTags, setShowAllEditTags] = useState(false)
 
   // mobile sheet
   const [sheetState, setSheetState] = useState<SheetState>('mid')
 
-  useEffect(() => { setShowCard(false) }, [activeList])
+  // view — driven by URL ?view=exploration
+  const searchParams = useSearchParams()
+  const panelTab = searchParams.get('view') === 'exploration' ? 'exploration' : 'saved'
+
+  useEffect(() => {
+    setShareStatus('idle'); setShareError(null); setShareUrl(null); setCopyStatus('idle')
+  }, [activeList])
 
   // Guest mode: hydrate from localStorage on mount
   useEffect(() => {
@@ -229,6 +248,8 @@ export default function PlaceSearch({
 
   // ── derived ─────────────────────────────────────────────────────────────
 
+  const regions = useMemo(() => analyzeRegions(savedPlaces), [savedPlaces])
+
   const filteredPlaces = savedPlaces
     .filter((p) => !activeList   || p.listId === activeList)
     .filter((p) => !activeCatGroup || p.categoryGroup === activeCatGroup)
@@ -250,6 +271,7 @@ export default function PlaceSearch({
     setPendingCatGroup(group)
     setPendingCatSub(subgroup)
     setPendingTags([])
+    setPendingMemo('')
     setShowAllSaveTags(false)
   }
 
@@ -269,11 +291,12 @@ export default function PlaceSearch({
     setPendingSave(null)
     setEditingPlace(place)
     setEditTags([...place.preferenceTags])
+    setEditMemo(place.memo)
     setShowAllEditTags(false)
   }
 
   function closeEditTags() {
-    setEditingPlace(null); setEditTags([]); setShowAllEditTags(false)
+    setEditingPlace(null); setEditTags([]); setEditMemo(''); setShowAllEditTags(false)
   }
 
   function toggleEditTag(tag: string) {
@@ -284,12 +307,14 @@ export default function PlaceSearch({
     if (!editingPlace) return
     const { mapx, mapy } = editingPlace
     const newTags = editTags
+    const newMemo = editMemo
     setSavedPlaces((prev) =>
-      prev.map((p) => p.mapx === mapx && p.mapy === mapy ? { ...p, preferenceTags: newTags } : p)
+      prev.map((p) => p.mapx === mapx && p.mapy === mapy ? { ...p, preferenceTags: newTags, memo: newMemo } : p)
     )
     closeEditTags()
     if (!isGuest) {
       try { await updatePlaceTagsAction(mapx, mapy, newTags) } catch {}
+      try { await updatePlaceMemoAction(mapx, mapy, newMemo) } catch {}
     }
   }
 
@@ -333,12 +358,53 @@ export default function PlaceSearch({
       mapy:            pendingSave.mapy,
       preferenceTags:  pendingPreferenceTags,
       listId:          pendingListId,
+      memo:            pendingMemo,
     }
     setPendingSave(null); setPendingCatGroup(''); setPendingCatSub('')
-    setPendingTags([]); setPendingListId(null); setShowNewListInput(false); setNewListName('')
+    setPendingTags([]); setPendingMemo(''); setPendingListId(null); setShowNewListInput(false); setNewListName('')
     setSavedPlaces((prev) => [...prev, data])
     if (!isGuest) {
       try { await savePlaceAction(data) } catch {}
+    }
+  }
+
+  async function handleShareList(listId: string) {
+    console.log('[share] selected listId:', listId)
+    setShareStatus('loading')
+    setShareError(null)
+    setShareUrl(null)
+    setCopyStatus('idle')
+
+    if (!isGuest) {
+      try {
+        await publishListAction(listId)
+        console.log('[share] publishList succeeded for', listId)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[share] publishList failed:', msg)
+        setShareStatus('error')
+        setShareError(`목록 공개 실패: ${msg}`)
+        return
+      }
+    }
+
+    const url = `${window.location.origin}/share/${listId}`
+    console.log('[share] generated URL:', url)
+    setShareStatus('idle')
+    setShareUrl(url)
+  }
+
+  async function handleCopyUrl() {
+    if (!shareUrl) return
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      console.log('[share] clipboard copy succeeded')
+      setCopyStatus('copied')
+      setTimeout(() => setCopyStatus('idle'), 2500)
+    } catch (err) {
+      console.warn('[share] clipboard copy failed, selecting input:', err)
+      setCopyStatus('failed')
+      shareUrlInputRef.current?.select()
     }
   }
 
@@ -488,10 +554,22 @@ export default function PlaceSearch({
           </div>
         )}
 
+        {/* memo */}
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">메모</p>
+          <textarea
+            value={pendingMemo}
+            onChange={(e) => setPendingMemo(e.target.value)}
+            placeholder="이 장소에 대한 메모를 남겨보세요"
+            rows={2}
+            className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 placeholder-gray-300 focus:border-blue-400 focus:outline-none resize-none"
+          />
+        </div>
+
         {/* actions */}
         <div className="flex gap-2">
           <button
-            onClick={() => { setPendingSave(null); setPendingCatGroup(''); setPendingCatSub(''); setPendingTags([]); setPendingListId(null) }}
+            onClick={() => { setPendingSave(null); setPendingCatGroup(''); setPendingCatSub(''); setPendingTags([]); setPendingMemo(''); setPendingListId(null) }}
             className="flex-1 py-1.5 rounded-lg border border-gray-300 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
           >
             취소
@@ -549,6 +627,16 @@ export default function PlaceSearch({
             className="text-xs text-gray-400 hover:text-gray-700 transition-colors">
             {showAllEditTags ? '접기 ↑' : '더 보기 ↓'}
           </button>
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">메모</p>
+          <textarea
+            value={editMemo}
+            onChange={(e) => setEditMemo(e.target.value)}
+            placeholder="이 장소에 대한 메모를 남겨보세요"
+            rows={2}
+            className="w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-700 placeholder-gray-300 focus:border-blue-400 focus:outline-none resize-none"
+          />
         </div>
         <div className="flex gap-2">
           <button onClick={closeEditTags}
@@ -626,7 +714,7 @@ export default function PlaceSearch({
                       </button>
                     )}
                   </div>
-                  {pendingSave === place && <SaveDialog place={place} />}
+                  {pendingSave === place && SaveDialog({ place })}
                 </li>
               ))}
             </ul>
@@ -731,18 +819,49 @@ export default function PlaceSearch({
           </span>
         </p>
         {activeList && (
-          <button onClick={() => setShowCard((v) => !v)} className="text-xs text-gray-500 hover:text-gray-800 transition-colors">
-            {showCard ? '카드 닫기' : '카드 만들기'}
+          <button
+            onClick={() => handleShareList(activeList)}
+            disabled={shareStatus === 'loading'}
+            className="text-xs text-gray-500 hover:text-gray-800 disabled:opacity-50 transition-colors"
+          >
+            {shareStatus === 'loading' ? '공유 중...' : '공유하기'}
           </button>
         )}
       </div>
-      {showCard && activeList && (() => {
-        const list      = lists.find((l) => l.id === activeList)
-        const listPlaces = savedPlaces.filter((p) => p.listId === activeList)
-        return list && listPlaces.length > 0
-          ? <div className="px-3 pb-2"><ListCard list={list} places={listPlaces} /></div>
-          : <p className="text-xs text-gray-400 px-3">이 목록에 장소가 없어요.</p>
-      })()}
+      {/* Share error */}
+      {activeList && shareStatus === 'error' && shareError && (
+        <p className="mx-3 mb-2 text-xs text-red-500">{shareError}</p>
+      )}
+      {/* Share URL card — visible after publishing until list changes */}
+      {activeList && shareUrl && (
+        <div className="mx-3 mb-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              ref={shareUrlInputRef}
+              readOnly
+              value={shareUrl}
+              onFocus={(e) => e.target.select()}
+              className="flex-1 min-w-0 rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:outline-none focus:border-blue-300"
+            />
+            <button
+              onClick={handleCopyUrl}
+              className={`shrink-0 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                copyStatus === 'copied'
+                  ? 'bg-green-100 text-green-700 border border-green-200'
+                  : 'bg-gray-900 text-white hover:bg-gray-700'
+              }`}
+            >
+              {copyStatus === 'copied' ? '복사됨 ✓' : '링크 복사'}
+            </button>
+          </div>
+          {copyStatus === 'copied' && (
+            <p className="text-[11px] text-green-600">링크가 복사되었어요 ✓</p>
+          )}
+          {copyStatus === 'failed' && (
+            <p className="text-[11px] text-gray-500">자동 복사 실패, 길게 눌러 복사해주세요</p>
+          )}
+        </div>
+      )}
       <ul className="divide-y divide-gray-100">
         {filteredPlaces.map((place, i) => {
           const isEditingThis = editingPlace?.mapx === place.mapx && editingPlace?.mapy === place.mapy
@@ -756,7 +875,7 @@ export default function PlaceSearch({
               onClick={() => setSelectedPlace(place)}
               onDelete={() => handleDeletePlace(place)}
               onEditClick={() => isEditingThis ? closeEditTags() : openEditTags(place)}
-              editPanel={isEditingThis ? <TagEditPanel /> : undefined}
+              editPanel={isEditingThis ? TagEditPanel() : undefined}
             />
           )
         })}
@@ -766,14 +885,7 @@ export default function PlaceSearch({
 
   // ── render ────────────────────────────────────────────────────────────────
 
-  const sheetTranslate =
-    sheetState === 'expanded'
-      ? 'translateY(0)'
-      : `translateY(calc(100% - ${SHEET_PEEK[sheetState]}px))`
-
-  const collapsedSummary = savedPlaces.length > 0
-    ? `저장 ${savedPlaces.length}개 · 태그 필터`
-    : '장소를 검색해서 저장해보세요'
+  const maxRegionCount = regions[0]?.count ?? 1
 
   const promptConfig = activePrompt === 'guest-signup' ? {
     message: '탐험이 쌓이고 있어요 ✨\n지금 가입하면 저장한 장소를 바탕으로\n나만의 탐험 카드를 확인할 수 있어요',
@@ -788,6 +900,114 @@ export default function PlaceSearch({
     ],
   } : null
 
+  // ── exploration view (map + region summary) ─────────────────────────────
+
+  if (panelTab === 'exploration') {
+    const regionList = (
+      <div className="space-y-3">
+        {regions.length === 0 ? (
+          <div className="text-center py-10">
+            <p className="text-sm text-gray-400">장소를 저장하면 탐험 패턴을 볼 수 있어요</p>
+          </div>
+        ) : (
+          <>
+            {regions.map(region => {
+              const colors = CATEGORY_COLORS[region.dominantCategory] ?? CATEGORY_COLORS['기타']
+              return (
+                <div key={region.name}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: colors.stroke }} />
+                      <span className="text-xs font-medium text-gray-900 truncate">{region.name}</span>
+                      {region.dominantTag && (
+                        <span className="text-[10px] text-gray-400 truncate">{region.dominantTag}</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500 flex-shrink-0 ml-2">{region.count}곳</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${(region.count / maxRegionCount) * 100}%`,
+                        background: colors.stroke,
+                        opacity: 0.7,
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+            <div className="flex flex-wrap gap-x-3 gap-y-1.5 pt-1 border-t border-gray-100">
+              {Object.entries(CATEGORY_COLORS).map(([cat, colors]) => {
+                if (!regions.some(r => r.dominantCategory === cat)) return null
+                return (
+                  <div key={cat} className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: colors.fill, border: `1.5px solid ${colors.stroke}` }} />
+                    <span className="text-xs text-gray-500">{cat}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    )
+
+    return (
+      <>
+        {/* Desktop: left panel + map (same split as saved view) */}
+        <div className="hidden md:flex h-full overflow-hidden">
+          <aside className="flex flex-col w-[380px] flex-shrink-0 border-r border-gray-200 bg-white overflow-hidden">
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">지역별 탐험</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">저장한 {savedPlaces.length}곳</p>
+              </div>
+              {regionList}
+            </div>
+          </aside>
+          <div className="flex-1 relative overflow-hidden">
+            <ExplorationMap regions={regions} />
+          </div>
+        </div>
+
+        {/* Mobile: map on top, summary scrollable below */}
+        <div className="md:hidden flex flex-col h-full overflow-hidden">
+          <div className="flex-shrink-0 h-[45%] relative">
+            <ExplorationMap regions={regions} />
+          </div>
+          <div className="flex-1 overflow-y-auto bg-white border-t border-gray-200 px-4 py-4 space-y-4">
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">지역별 탐험</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">저장한 {savedPlaces.length}곳</p>
+            </div>
+            {regionList}
+          </div>
+        </div>
+
+        {promptConfig && (
+          <PromptModal
+            message={promptConfig.message}
+            actions={promptConfig.actions}
+            onDismiss={() => setActivePrompt(null)}
+          />
+        )}
+      </>
+    )
+  }
+
+  // ── saved view (map + panel) ─────────────────────────────────────────────
+
+  const sheetTranslate =
+    sheetState === 'expanded'
+      ? 'translateY(0)'
+      : `translateY(calc(100% - ${SHEET_PEEK[sheetState]}px))`
+
+  const collapsedSummary = savedPlaces.length > 0
+    ? `저장 ${savedPlaces.length}개 · 태그 필터`
+    : '장소를 검색해서 저장해보세요'
+
   return (
     <>
     <div className="flex h-full overflow-hidden">
@@ -795,10 +1015,7 @@ export default function PlaceSearch({
       {/* ── PC: left panel ─────────────────────────────────────────── */}
       <aside className="hidden md:flex flex-col w-[380px] flex-shrink-0 border-r border-gray-200 bg-white overflow-hidden">
         <div className="flex-1 overflow-y-auto divide-y divide-gray-100">
-          {panelSearch}
-          {panelEmpty}
-          {panelFilters}
-          {panelSaved}
+          {panelSearch}{panelEmpty}{panelFilters}{panelSaved}
         </div>
       </aside>
 
@@ -825,10 +1042,7 @@ export default function PlaceSearch({
             )}
           </button>
           <div className="flex-1 overflow-y-auto bg-white divide-y divide-gray-100">
-            {panelSearch}
-            {panelEmpty}
-            {panelFilters}
-            {panelSaved}
+            {panelSearch}{panelEmpty}{panelFilters}{panelSaved}
           </div>
         </div>
       </div>

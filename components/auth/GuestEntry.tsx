@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, Suspense } from 'react'
 import Link from 'next/link'
+import { usePathname, useSearchParams } from 'next/navigation'
 import PlaceSearch from '@/components/search/PlaceSearch'
 
 type EntryMode = 'intro' | 'guest'
@@ -13,6 +14,49 @@ const INTRO_PARAGRAPHS = [
   '게스트 모드에서는 가볍게 둘러볼 수 있고,\n가입하면 저장한 장소를 바탕으로\n나만의 탐험 카드와 추천을 확인할 수 있어요',
 ]
 
+function GuestNavTabs() {
+  const pathname     = usePathname()
+  const searchParams = useSearchParams()
+  const view         = searchParams.get('view')
+
+  function tabCls(active: boolean) {
+    return `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+      active
+        ? 'bg-gray-900 text-white'
+        : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+    }`
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <Link href="/"                  className={tabCls(pathname === '/' && view !== 'exploration')}>저장 장소</Link>
+      <Link href="/?view=exploration" className={tabCls(pathname === '/' && view === 'exploration')}>탐험 패턴</Link>
+    </div>
+  )
+}
+
+function GuestNav() {
+  return (
+    <nav className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
+      <div className="flex items-center gap-3">
+        <Suspense fallback={<div className="flex items-center gap-1 h-8" />}>
+          <GuestNavTabs />
+        </Suspense>
+        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded">게스트</span>
+      </div>
+      <div className="flex items-center gap-3">
+        <p className="text-xs text-gray-400 hidden sm:block">데이터는 이 기기에만 저장됩니다</p>
+        <Link
+          href="/auth/login"
+          className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors"
+        >
+          로그인 / 회원가입
+        </Link>
+      </div>
+    </nav>
+  )
+}
+
 export default function GuestEntry() {
   const [mode, setMode] = useState<EntryMode>('intro')
 
@@ -21,7 +65,9 @@ export default function GuestEntry() {
       <div className="flex flex-col h-screen overflow-hidden">
         <GuestNav />
         <main className="flex-1 overflow-hidden">
-          <PlaceSearch initialSavedPlaces={[]} initialLists={[]} isGuest />
+          <Suspense fallback={<div className="flex-1 bg-gray-50" />}>
+            <PlaceSearch initialSavedPlaces={[]} initialLists={[]} isGuest />
+          </Suspense>
         </main>
       </div>
     )
@@ -60,25 +106,5 @@ export default function GuestEntry() {
         </div>
       </div>
     </div>
-  )
-}
-
-function GuestNav() {
-  return (
-    <nav className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-gray-700">지도</span>
-        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-medium rounded">게스트</span>
-      </div>
-      <div className="flex items-center gap-3">
-        <p className="text-xs text-gray-400 hidden sm:block">데이터는 이 기기에만 저장됩니다</p>
-        <Link
-          href="/auth/login"
-          className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors"
-        >
-          로그인 / 회원가입
-        </Link>
-      </div>
-    </nav>
   )
 }

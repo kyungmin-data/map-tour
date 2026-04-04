@@ -7,7 +7,8 @@ export function loadGuestPlaces(): PlaceData[] {
   if (typeof window === 'undefined') return []
   try {
     const raw = localStorage.getItem(PLACES_KEY)
-    return raw ? (JSON.parse(raw) as PlaceData[]) : []
+    if (!raw) return []
+    return (JSON.parse(raw) as PlaceData[]).map((p) => ({ ...p, memo: p.memo ?? '' }))
   } catch {
     return []
   }
